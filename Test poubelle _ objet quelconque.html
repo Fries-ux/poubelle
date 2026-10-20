@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test poubelle : objet quelconque</title>
+<style>
+:root{--bg:#f4f5f2;--card:#fff;--tx:#1b1f1a;--mut:#5f665c;--bd:#d5d9d0;--ac:#0f6e56;--acbg:#e1f5ee;--wa:#a32d2d;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151815;--card:#1f231e;--tx:#eef1ea;--mut:#a3aa9e;--bd:#3a4037;--ac:#5dcaa5;--acbg:#04342c;--wa:#f09595;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#151815;--card:#1f231e;--tx:#eef1ea;--mut:#a3aa9e;--bd:#3a4037;--ac:#5dcaa5;--acbg:#04342c;--wa:#f09595;color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}
+p{margin:0 0 12px;color:var(--mut)}
+canvas{width:100%;display:block;border:1px solid var(--bd);border-radius:8px;background:#000;touch-action:none;cursor:crosshair}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
+button,label.btn{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx);cursor:pointer}
+button.p{background:var(--ac);color:var(--bg);border-color:var(--ac)}
+input[type=file]{display:none}
+#sw{width:28px;height:28px;border-radius:50%;border:1px solid var(--bd)}
+#cmd{font-size:40px;font-weight:600;text-align:center;padding:12px;border-radius:8px;background:var(--acbg);color:var(--ac);margin:12px 0}
+.bars{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;font-size:14px}
+.m{height:12px;background:var(--card);border:1px solid var(--bd);border-radius:6px;position:relative;overflow:hidden}
+.m i{position:absolute;top:0;bottom:0;background:var(--ac)}
+.m b{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--mut)}
+#st{font-size:14px;color:var(--mut)}
+#st.e{color:var(--wa)}
+input[type=range]{flex:1;min-width:140px}
+</style>
+</head>
+<body>
+<main>
+<h1>Test : n’importe quel déchet</h1>
+<p>1) Démarre la caméra. 2) Touche « Armer » (elle mémorise le fond). 3) Lance ou pose un objet dans l’image : la page apprend sa couleur toute seule, puis donne les ordres moteurs.</p>
+<canvas id="c"></canvas>
+<div class="row">
+<button class="p" id="go">Démarrer la caméra</button>
+<button id="arm">Armer (mémoriser le fond)</button>
+<label class="btn">Photo de test<input type="file" id="f" accept="image/*"></label>
+<span id="sw" title="Couleur apprise"></span>
+</div>
+<div id="st">Démarre la caméra.</div>
+<div class="row"><span>Tolérance de couleur</span><input type="range" id="tol" min="20" max="120" value="55"><span id="tv">55</span></div>
+<div id="cmd">—</div>
+<div class="bars">
+<span>Moteur gauche</span><div class="m"><b></b><i id="lb"></i></div><span id="lv">0.00</span>
+<span>Moteur droit</span><div class="m"><b></b><i id="rb"></i></div><span id="rv">0.00</span>
+</div>
+<p style="margin-top:12px">Barres : au centre = arrêt, à droite = avance, à gauche = recule. Tu peux aussi toucher un objet à l’écran pour choisir sa couleur à la main.</p>
+</main>
+<script>
+const W=192,H=144,DIFF=35,MINB=0.002,MAXB=0.2,MIN=0.002,CLOSE=0.10,TOOCLOSE=0.22,DEAD=0.15,BASE=0.6,K=0.8;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d',{willReadFrequently:true});
+cv.width=W;cv.height=H;
+const v=document.createElement('video');v.playsInline=true;v.muted=true;
+let source=null,clean=null,target=null,bg=null,state='OFF',last=null,still=0,lost=0,lastRGB=null;
+const st=document.getElementById('st'),tol=document.getElementById('tol'),sw=document.getElementById('sw');
+function msg(t,err){st.textContent=t;st.className=err?'e':''}
+const clamp=x=>Math.max(-1,Math.min(1,x));
+tol.oninput=()=>{document.getElementById('tv').textContent=tol.value};
+document.getElementById('go').onclick=async()=>{
+try{
+const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:640,height:480},audio:false});
+v.srcObject=s;await v.play();source=v;msg('Caméra active. Touche « Armer ».');
+}catch(e){msg('Caméra bloquée. Utilise « Photo de test » ou ouvre la page dans Safari.',true)}
+};
+document.getElementById('f').onchange=e=>{
+const file=e.target.files[0];if(!file)return;
+const im=new Image();im.onload=()=>{source=im;msg('Photo chargée. Touche un objet pour choisir sa couleur.')};
+im.src=URL.createObjectURL(file);
+};
+document.getElementById('arm').onclick=()=>{
+if(!clean){msg('Démarre d’abord la caméra.',true);return}
+bg=new Uint8ClampedArray(clean);target=null;state='ARMED';lost=0;
+sw.style.background='transparent';
+msg('Armé. Lance un objet dans le champ de la caméra.');
+};
+cv.addEventListener('pointerdown',e=>{
+if(!clean)return;
+const r=cv.getBoundingClientRect();
+const x=Math.floor((e.clientX-r.left)/r.width*W),y=Math.floor((e.clientY-r.top)/r.height*H);
+let R=0,G=0,B=0,n=0;
+for(let j=-2;j<=2;j++)for(let i=-2;i<=2;i++){
+const xx=x+i,yy=y+j;if(xx<0||yy<0||xx>=W||yy>=H)continue;
+const k=(yy*W+xx)*4;R+=clean[k];G+=clean[k+1];B+=clean[k+2];n++}
+if(!n)return;
+setTarget([R/n,G/n,B/n]);state='CHASE';msg('Couleur choisie à la main. Poursuite.');
+});
+function setTarget(c){target=c;sw.style.background='rgb('+Math.round(c[0])+','+Math.round(c[1])+','+Math.round(c[2])+')'}
+function show(cmd,L,R){
+document.getElementById('cmd').textContent=cmd;
+for(const [id,val] of [['l',L],['r',R]]){
+const b=document.getElementById(id+'b');
+b.style.left=(val>=0?50:50+val*50)+'%';
+b.style.width=Math.abs(val)*50+'%';
+document.getElementById(id+'v').textContent=val.toFixed(2)}
+}
+function detect(img,d){
+let n=0,sx=0,sy=0,r=0,g=0,b=0;
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+const k=(y*W+x)*4;
+const dd=(Math.abs(clean[k]-bg[k])+Math.abs(clean[k+1]-bg[k+1])+Math.abs(clean[k+2]-bg[k+2]))/3;
+if(dd>DIFF){n++;sx+=x;sy+=y;r+=clean[k];g+=clean[k+1];b+=clean[k+2];d[k]=0;d[k+1]=255;d[k+2]=255}
+}
+ctx.putImageData(img,0,0);
+const ratio=n/(W*H);
+if(ratio<MINB||ratio>MAXB){
+if(state==='FLIGHT'){lost++;if(lost>30){state='ARMED';lost=0;msg('Objet perdu. En attente d’un nouveau lancer.')}}
+show(ratio>MAXB?'TROP GRAND':'ATTEND',0,0);return}
+lost=0;
+const cx=sx/n,cy=sy/n;
+lastRGB=[r/n,g/n,b/n];
+if(state==='ARMED'){state='FLIGHT';still=0;last=[cx,cy];msg('Objet détecté, je suis son mouvement…')}
+else{
+const mv=Math.hypot(cx-last[0],cy-last[1]);
+still=mv<2?still+1:0;last=[cx,cy];
+if(still>=10){setTarget(lastRGB);state='CHASE';msg('Objet posé : couleur apprise. Poursuite.')}
+}
+show('ANALYSE',0,0);
+}
+function chase(img,d){
+const t=+tol.value;
+let n=0,sx=0,sy=0;
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+const k=(y*W+x)*4;
+if(Math.hypot(d[k]-target[0],d[k+1]-target[1],d[k+2]-target[2])<=t){n++;sx+=x;sy+=y;d[k]=255;d[k+1]=0;d[k+2]=255}
+}
+ctx.putImageData(img,0,0);
+const ratio=n/(W*H);
+if(ratio<MIN){show('CHERCHE',0.4,-0.4);return}
+const cx=sx/n,cy=sy/n,off=(cx-W/2)/(W/2);
+ctx.strokeStyle='#fff';ctx.lineWidth=1;
+ctx.beginPath();ctx.moveTo(cx-8,cy);ctx.lineTo(cx+8,cy);ctx.moveTo(cx,cy-8);ctx.lineTo(cx,cy+8);ctx.stroke();
+if(ratio>TOOCLOSE){show('RECULE',-0.5,-0.5);return}
+if(ratio>CLOSE){show('STOP',0,0);return}
+const L=clamp(BASE+K*off),R=clamp(BASE-K*off);
+show(Math.abs(off)<DEAD?'AVANCE':(off<0?'GAUCHE':'DROITE'),L,R);
+}
+function frame(){
+requestAnimationFrame(frame);
+if(!source)return;
+if(source===v&&v.readyState<2)return;
+ctx.drawImage(source,0,0,W,H);
+const img=ctx.getImageData(0,0,W,H),d=img.data;
+clean=new Uint8ClampedArray(d);
+if((state==='ARMED'||state==='FLIGHT')&&bg)detect(img,d);
+else if(state==='CHASE'&&target)chase(img,d);
+}
+frame();
+</script>
+</body>
+</html>
