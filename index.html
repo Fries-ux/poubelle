@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Test poubelle : objet quelconque</title>
+<title>Test poubelle : suivi d’objet</title>
 <style>
 :root{--bg:#f4f5f2;--card:#fff;--tx:#1b1f1a;--mut:#5f665c;--bd:#d5d9d0;--ac:#0f6e56;--acbg:#e1f5ee;--wa:#a32d2d;color-scheme:light}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151815;--card:#1f231e;--tx:#eef1ea;--mut:#a3aa9e;--bd:#3a4037;--ac:#5dcaa5;--acbg:#04342c;--wa:#f09595;color-scheme:dark}}
@@ -22,6 +22,7 @@ button.p{background:var(--ac);color:var(--bg);border-color:var(--ac)}
 input[type=file]{display:none}
 #sw{width:28px;height:28px;border-radius:50%;border:1px solid var(--bd)}
 #cmd{font-size:40px;font-weight:600;text-align:center;padding:12px;border-radius:8px;background:var(--acbg);color:var(--ac);margin:12px 0}
+#ang{text-align:center;color:var(--mut);font-size:14px;margin-bottom:12px}
 .bars{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;font-size:14px}
 .m{height:12px;background:var(--card);border:1px solid var(--bd);border-radius:6px;position:relative;overflow:hidden}
 .m i{position:absolute;top:0;bottom:0;background:var(--ac)}
@@ -33,8 +34,8 @@ input[type=range]{flex:1;min-width:140px}
 </head>
 <body>
 <main>
-<h1>Test : n’importe quel déchet</h1>
-<p>1) Démarre la caméra. 2) Touche « Armer » (elle mémorise le fond). 3) Lance ou pose un objet dans l’image : la page apprend sa couleur toute seule, puis donne les ordres moteurs.</p>
+<h1>Test : suivi d’un objet</h1>
+<p>1) Démarre la caméra. 2) Touche « Armer » (elle mémorise le fond). 3) Bouge un petit objet dans l’image : la page affiche son angle par rapport au centre et dit où aller. Au centre = « SOUS L’OBJET ».</p>
 <canvas id="c"></canvas>
 <div class="row">
 <button class="p" id="go">Démarrer la caméra</button>
@@ -44,7 +45,9 @@ input[type=range]{flex:1;min-width:140px}
 </div>
 <div id="st">Démarre la caméra.</div>
 <div class="row"><span>Tolérance de couleur</span><input type="range" id="tol" min="20" max="120" value="55"><span id="tv">55</span></div>
+<div class="row"><span>Angle de vue</span><input type="range" id="fov" min="40" max="170" value="65"><span id="fv">65°</span></div>
 <div id="cmd">—</div>
+<div id="ang">—</div>
 <div class="bars">
 <span>Moteur gauche</span><div class="m"><b></b><i id="lb"></i></div><span id="lv">0.00</span>
 <span>Moteur droit</span><div class="m"><b></b><i id="rb"></i></div><span id="rv">0.00</span>
@@ -61,6 +64,7 @@ const st=document.getElementById('st'),tol=document.getElementById('tol'),sw=doc
 function msg(t,err){st.textContent=t;st.className=err?'e':''}
 const clamp=x=>Math.max(-1,Math.min(1,x));
 tol.oninput=()=>{document.getElementById('tv').textContent=tol.value};
+document.getElementById('fov').oninput=e=>{document.getElementById('fv').textContent=e.target.value+'°'};
 document.getElementById('go').onclick=async()=>{
 try{
 const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:640,height:480},audio:false});
@@ -76,7 +80,7 @@ document.getElementById('arm').onclick=()=>{
 if(!clean){msg('Démarre d’abord la caméra.',true);return}
 bg=new Uint8ClampedArray(clean);target=null;state='ARMED';lost=0;
 sw.style.background='transparent';
-msg('Armé. Lance un objet dans le champ de la caméra.');
+msg('Armé. Bouge un objet dans le champ de la caméra.');
 };
 cv.addEventListener('pointerdown',e=>{
 if(!clean)return;
@@ -98,6 +102,15 @@ b.style.left=(val>=0?50:50+val*50)+'%';
 b.style.width=Math.abs(val)*50+'%';
 document.getElementById(id+'v').textContent=val.toFixed(2)}
 }
+function track(cx,cy){
+const ox=(cx-W/2)/(W/2),oy=(cy-H/2)/(H/2),f=(+document.getElementById('fov').value)/2;
+const ax=ox*f,ay=oy*f;
+document.getElementById('ang').textContent='Écart horizontal '+ax.toFixed(0)+'° · vertical '+ay.toFixed(0)+'°';
+if(Math.abs(ax)<5&&Math.abs(ay)<5){show('SOUS L’OBJET ✓',0,0);return}
+const fwd=-oy,turn=ox;
+const L=clamp(fwd+0.8*turn),R=clamp(fwd-0.8*turn);
+show(Math.abs(ox)>Math.abs(oy)?(ox>0?'DROITE':'GAUCHE'):(oy<0?'AVANCE':'RECULE'),L,R);
+}
 function detect(img,d){
 let n=0,sx=0,sy=0,r=0,g=0,b=0;
 for(let y=0;y<H;y++)for(let x=0;x<W;x++){
@@ -108,18 +121,20 @@ if(dd>DIFF){n++;sx+=x;sy+=y;r+=clean[k];g+=clean[k+1];b+=clean[k+2];d[k]=0;d[k+1
 ctx.putImageData(img,0,0);
 const ratio=n/(W*H);
 if(ratio<MINB||ratio>MAXB){
-if(state==='FLIGHT'){lost++;if(lost>30){state='ARMED';lost=0;msg('Objet perdu. En attente d’un nouveau lancer.')}}
+if(state==='FLIGHT'){lost++;if(lost>30){state='ARMED';lost=0;msg('Objet perdu. En attente d’un nouveau mouvement.')}}
 show(ratio>MAXB?'TROP GRAND':'ATTEND',0,0);return}
 lost=0;
 const cx=sx/n,cy=sy/n;
 lastRGB=[r/n,g/n,b/n];
-if(state==='ARMED'){state='FLIGHT';still=0;last=[cx,cy];msg('Objet détecté, je suis son mouvement…')}
+if(state==='ARMED'){state='FLIGHT';still=0;last=[cx,cy];msg('Objet détecté, je le suis…')}
 else{
 const mv=Math.hypot(cx-last[0],cy-last[1]);
 still=mv<2?still+1:0;last=[cx,cy];
-if(still>=10){setTarget(lastRGB);state='CHASE';msg('Objet posé : couleur apprise. Poursuite.')}
+if(still>=10){setTarget(lastRGB);state='CHASE';msg('Objet immobile : couleur apprise. Poursuite.')}
 }
-show('ANALYSE',0,0);
+ctx.strokeStyle='#fff';ctx.lineWidth=1;
+ctx.beginPath();ctx.moveTo(cx-8,cy);ctx.lineTo(cx+8,cy);ctx.moveTo(cx,cy-8);ctx.lineTo(cx,cy+8);ctx.stroke();
+track(cx,cy);
 }
 function chase(img,d){
 const t=+tol.value;
